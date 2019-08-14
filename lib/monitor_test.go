@@ -29,7 +29,7 @@ func (s *OssutilCommandSuite) TestUploadProgressBar(c *C) {
 		s.createFile(udir+string(os.PathSeparator)+filePath, randStr((i+3)*30*num), c)
 		len += (i + 3) * 30 * num
 	}
-	time.Sleep(3 * sleepTime)
+	time.Sleep(sleepTime)
 
 	// init copyCommand
 	err = s.initCopyCommand(udir, CloudURLToString(bucketName, object), true, true, false, DefaultBigFileThreshold, CheckpointDir, DefaultOutputDir)
@@ -1403,7 +1403,7 @@ func (s *OssutilCommandSuite) TestSnapshot(c *C) {
 	c.Assert(err, IsNil)
 
 	// -u --snapshot-path
-	time.Sleep(7 * time.Second)
+	time.Sleep(time.Second)
 	s.createFile(uploadFileName, data, c)
 	err = s.initCopyWithSnapshot(uploadFileName, CloudURLToString(bucketName, object), false, true, true, DefaultBigFileThreshold, spath)
 	c.Assert(err, IsNil)
@@ -1414,13 +1414,13 @@ func (s *OssutilCommandSuite) TestSnapshot(c *C) {
 	c.Assert(copyCommand.monitor.skipNum, Equals, int64(0))
 	c.Assert(copyCommand.monitor.errNum, Equals, int64(0))
 
-	// download with snapshot
+	// download with snapshot:success
 	err = s.initCopyWithSnapshot(CloudURLToString(bucketName, object), downloadFileName, false, false, false, DefaultBigFileThreshold, spath)
 	c.Assert(err, IsNil)
 	err = copyCommand.RunCommand()
-	c.Assert(err, NotNil)
+	c.Assert(err, IsNil)
 
-	// copy with snapshot
+	// copy with snapshot:error
 	err = s.initCopyWithSnapshot(CloudURLToString(bucketName, object), CloudURLToString(bucketNameDest, object), false, false, false, DefaultBigFileThreshold, spath)
 	c.Assert(err, IsNil)
 	err = copyCommand.RunCommand()

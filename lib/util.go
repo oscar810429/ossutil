@@ -3,6 +3,7 @@ package lib
 import (
 	"bytes"
 	"fmt"
+	"hash"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -171,7 +172,6 @@ func filterObjectsFromChanWithPattern(srcCh <-chan string, pattern string, dstCh
 }
 
 // Following for strings
-
 func getFilter(cmdline []string) (bool, []filterOptionType) {
 	filters := make([]filterOptionType, 0)
 	for i, item := range cmdline {
@@ -199,12 +199,10 @@ func getFilter(cmdline []string) (bool, []filterOptionType) {
 
 			// To support standard glob
 			filter.pattern = strings.Replace(strArg, "[!", "[^", -1)
-
 			dir, _ := filepath.Split(filter.pattern)
 			if dir != "" {
 				return false, filters
 			}
-
 			filters = append(filters, filter)
 		}
 	}
@@ -457,4 +455,30 @@ func filterObjectsFromChanWithPatterns(chObjects <-chan objectInfoType, filters 
 	vsf := matchFiltersForObjects(objects, filters)
 	makeObjectChanFromArray(vsf, dstObjs)
 	defer close(dstObjs)
+}
+
+func GetCloudUrl(strlUrl, encodingType string) (*CloudURL, error) {
+	bucketUrL, err := StorageURLFromString(strlUrl, encodingType)
+	if err != nil {
+		return nil, err
+	}
+
+	if !bucketUrL.IsCloudURL() {
+		return nil, fmt.Errorf("parameter is not a cloud url,url is %s", bucketUrL.ToString())
+	}
+
+	cloudUrl := bucketUrL.(CloudURL)
+	if cloudUrl.bucket == "" {
+		return nil, fmt.Errorf("bucket name is empty,url is %s", bucketUrL.ToString())
+	}
+	return &cloudUrl, nil
+}
+
+func matchHash(fnvIns hash.Hash64, key string, modeValue int, countValue int) bool {
+	fnvIns.Reset()
+	fnvIns.Write([]byte(key))
+	if fnvIns.Sum64()%uint64(countValue) == uint64(modeValue) {
+		return true
+	}
+	return false
 }

@@ -23,17 +23,23 @@ func Test(t *testing.T) {
 	TestingT(t)
 }
 
-type OssutilCommandSuite struct{}
+type OssutilCommandSuite struct {
+	startT time.Time
+}
 
 var _ = Suite(&OssutilCommandSuite{})
 
 var (
 	// Update before running test
-	endpoint        = "<testEndpoint>"
-	accessKeyID     = "<testAccessKeyID>"
-	accessKeySecret = "<testAccessKeySecret>"
-	stsToken        = "<testSTSToken>"
-	payerBucket     = "<testPayerBucket>"
+	endpoint            = ""
+	accessKeyID         = ""
+	accessKeySecret     = ""
+	stsToken            = ""
+	payerBucket         = ""
+	payerBucketEndPoint = ""
+	proxyHost           = ""
+	proxyUser           = ""
+	proxyPwd            = ""
 )
 
 var (
@@ -56,7 +62,8 @@ var (
 )
 
 var (
-	bucketNamePrefix   = "ossutil-test-" + randLowStr(6)
+	commonNamePrefix   = "ossutil-test-"
+	bucketNamePrefix   = commonNamePrefix + randLowStr(6)
 	bucketNameExist    = "special-" + bucketNamePrefix + "existbucket"
 	bucketNameDest     = "special-" + bucketNamePrefix + "destbucket"
 	bucketNameNotExist = "nodelete-ossutil-test-notexist"
@@ -64,6 +71,7 @@ var (
 
 // Run once when the suite starts running
 func (s *OssutilCommandSuite) SetUpSuite(c *C) {
+	fmt.Printf("set up OssutilCommandSuite\n")
 	os.Stdout = testLogFile
 	os.Stderr = testLogFile
 	processTickInterval = 1
@@ -76,7 +84,7 @@ func (s *OssutilCommandSuite) SetUpSuite(c *C) {
 }
 
 func SetUpCredential() {
-	if endpoint == "<testEndpoint>" {
+	if endpoint == "" {
 		endpoint = os.Getenv("OSS_TEST_ENDPOINT")
 	}
 	if strings.HasPrefix(endpoint, "https://") {
@@ -85,13 +93,13 @@ func SetUpCredential() {
 	if strings.HasPrefix(endpoint, "http://") {
 		endpoint = endpoint[7:]
 	}
-	if accessKeyID == "<testAccessKeyID>" {
+	if accessKeyID == "" {
 		accessKeyID = os.Getenv("OSS_TEST_ACCESS_KEY_ID")
 	}
-	if accessKeySecret == "<testAccessKeySecret>" {
+	if accessKeySecret == "" {
 		accessKeySecret = os.Getenv("OSS_TEST_ACCESS_KEY_SECRET")
 	}
-	if payerBucket == "<testPayerBucket>" {
+	if payerBucket == "" {
 		payerBucket = os.Getenv("OSS_TEST_PAYER_BUCKET")
 	}
 	if ue := os.Getenv("OSS_TEST_UPDATE_ENDPOINT"); ue != "" {
@@ -106,17 +114,37 @@ func SetUpCredential() {
 	if strings.HasPrefix(vUpdateEndpoint, "http://") {
 		vUpdateEndpoint = vUpdateEndpoint[7:]
 	}
+	if payerBucketEndPoint == "" {
+		payerBucketEndPoint = os.Getenv("OSS_TEST_PAYER_ENDPOINT")
+		if strings.HasPrefix(payerBucketEndPoint, "https://") {
+			payerBucketEndPoint = payerBucketEndPoint[8:]
+		}
+		if strings.HasPrefix(payerBucketEndPoint, "http://") {
+			payerBucketEndPoint = payerBucketEndPoint[7:]
+		}
+	}
+
+	if proxyHost == "" {
+		proxyHost = os.Getenv("OSS_TEST_PROXY_HOST")
+	}
+	if proxyUser == "" {
+		proxyUser = os.Getenv("OSS_TEST_PROXY_USER")
+	}
+	if proxyPwd == "" {
+		proxyPwd = os.Getenv("OSS_TEST_PROXY_PASSWORD")
+	}
 }
 
 func (s *OssutilCommandSuite) SetUpBucketEnv(c *C) {
-	s.removeBuckets(bucketNamePrefix, c)
+	s.removeBuckets(commonNamePrefix, c)
 	s.putBucket(bucketNameExist, c)
 	s.putBucket(bucketNameDest, c)
 }
 
 // Run before each test or benchmark starts running
 func (s *OssutilCommandSuite) TearDownSuite(c *C) {
-	s.removeBuckets(bucketNamePrefix, c)
+	fmt.Printf("tear down OssutilCommandSuite\n")
+	s.removeBuckets(commonNamePrefix, c)
 	s.removeBucket(bucketNameExist, true, c)
 	s.removeBucket(bucketNameDest, true, c)
 	testLogger.Println("test command completed")
@@ -133,11 +161,16 @@ func (s *OssutilCommandSuite) TearDownSuite(c *C) {
 
 // Run after each test or benchmark runs
 func (s *OssutilCommandSuite) SetUpTest(c *C) {
+	fmt.Printf("set up test:%s\n", c.TestName())
+	s.startT = time.Now()
 	configFile = ConfigFile
 }
 
 // Run once after all tests or benchmarks have finished running
 func (s *OssutilCommandSuite) TearDownTest(c *C) {
+	endT := time.Now()
+	cost := endT.UnixNano()/1000/1000 - s.startT.UnixNano()/1000/1000
+	fmt.Printf("tear down test:%s,cost:%d(ms)\n", c.TestName(), cost)
 }
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -153,6 +186,53 @@ func randStr(n int) string {
 
 func randLowStr(n int) string {
 	return strings.ToLower(randStr(n))
+}
+
+func getFileList(dpath string) ([]string, error) {
+	fileNames := make([]string, 0)
+	err := filepath.Walk(dpath, func(fpath string, f os.FileInfo, err error) error {
+		if f == nil {
+			return err
+		}
+		dpath = filepath.Clean(dpath)
+		fpath = filepath.Clean(fpath)
+		if err != nil {
+			return fmt.Errorf("list file error: %s, info: %s", fpath, err.Error())
+		}
+
+		// fpath may be dir,exclude itself
+		if fpath != dpath {
+			fileNames = append(fileNames, fpath)
+		}
+
+		return nil
+	})
+	return fileNames, err
+}
+
+func (s *OssutilCommandSuite) PutObject(bucketName string, object string, body string, c *C) {
+	// create client and bucket
+	client, err := oss.New(endpoint, accessKeyID, accessKeySecret)
+	c.Assert(err, IsNil)
+
+	bucket, err := client.Bucket(bucketName)
+	c.Assert(err, IsNil)
+
+	err = bucket.PutObject(object, strings.NewReader(body))
+
+	c.Assert(err, IsNil)
+}
+
+func (s *OssutilCommandSuite) AppendObject(bucketName string, object string, body string, position int64, c *C) {
+	// create client and bucket
+	client, err := oss.New(endpoint, accessKeyID, accessKeySecret)
+	c.Assert(err, IsNil)
+
+	bucket, err := client.Bucket(bucketName)
+	c.Assert(err, IsNil)
+
+	_, err = bucket.AppendObject(object, strings.NewReader(body), position)
+	c.Assert(err, IsNil)
 }
 
 func (s *OssutilCommandSuite) configNonInteractive(c *C) {
@@ -194,7 +274,7 @@ func (s *OssutilCommandSuite) readFile(fileName string, c *C) string {
 func (s *OssutilCommandSuite) removeBuckets(prefix string, c *C) {
 	buckets := s.listBuckets(false, c)
 	for _, bucket := range buckets {
-		if strings.HasPrefix(bucket, prefix) {
+		if strings.Contains(bucket, prefix) {
 			s.removeBucket(bucket, true, c)
 		}
 	}
@@ -237,8 +317,8 @@ func (s *OssutilCommandSuite) rawList(args []string, cmdline string, optionPairs
 		"limitedNum":      &limitedNum,
 	}
 
-	for _, optionPair := range optionPairs {
-		options[optionPair.Key] = &optionPair.Value
+	for k, _ := range optionPairs {
+		options[optionPairs[k].Key] = &optionPairs[k].Value
 	}
 	showElapse, err := cm.RunCommand(command, args, options)
 	return showElapse, err
@@ -317,7 +397,7 @@ func (s *OssutilCommandSuite) listBuckets(shortFormat bool, c *C) []string {
 	out := os.Stdout
 	testResultFile, _ = os.OpenFile(resultPath, os.O_RDWR|os.O_TRUNC|os.O_CREATE, 0664)
 	os.Stdout = testResultFile
-	showElapse, err := s.rawList(args, "ls -s")
+	showElapse, err := s.rawList(args, "ls -a")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 	os.Stdout = out
@@ -332,9 +412,10 @@ func (s *OssutilCommandSuite) getBucketResults(c *C) []string {
 	result := s.getResult(c)
 	c.Assert(len(result) >= 1, Equals, true)
 	buckets := []string{}
+	shortEndpoint := strings.TrimRight(endpoint, ".aliyuncs.com")
 	for _, str := range result {
 		pos := strings.Index(str, SchemePrefix)
-		if pos != -1 {
+		if pos != -1 && strings.Contains(str, shortEndpoint) {
 			buckets = append(buckets, str[pos+len(SchemePrefix):])
 		}
 	}
@@ -375,12 +456,13 @@ func (s *OssutilCommandSuite) removeBucket(bucket string, clearObjects bool, c *
 	if !clearObjects {
 		showElapse, err = s.rawRemove(args, false, true, true)
 	} else {
+		s.removeBucketObjectVersions(bucket, c)
 		showElapse, err = s.removeWrapper("rm -arfb", bucket, "", c)
 	}
 	if err != nil {
-		verr := err.(BucketError).err
-		c.Assert(verr.(oss.ServiceError).Code == "NoSuchBucket" || verr.(oss.ServiceError).Code == "BucketNotEmpty", Equals, true)
-		c.Assert(showElapse, Equals, false)
+		bNoBucket := strings.Contains(err.Error(), "NoSuchBucket")
+		bBucketEmpty := strings.Contains(err.Error(), "BucketNotEmpty")
+		c.Assert((bBucketEmpty || bNoBucket), Equals, true)
 	} else {
 		c.Assert(showElapse, Equals, true)
 	}
@@ -400,7 +482,27 @@ func (s *OssutilCommandSuite) rawRemove(args []string, recursive, force, bucket 
 		"bucket":          &bucket,
 	}
 	showElapse, err := cm.RunCommand(command, args, options)
-	time.Sleep(sleepTime)
+	return showElapse, err
+}
+
+func (s *OssutilCommandSuite) removeBucketObjectVersions(bucket string, c *C) (bool, error) {
+	allVersions := true
+	recursive := true
+	force := true
+
+	args := []string{CloudURLToString(bucket, "")}
+	str := ""
+	options := OptionMapType{
+		"endpoint":        &str,
+		"accessKeyID":     &str,
+		"accessKeySecret": &str,
+		"stsToken":        &str,
+		"configFile":      &configFile,
+		"recursive":       &recursive,
+		"force":           &force,
+		"allVersions":     &allVersions,
+	}
+	showElapse, err := cm.RunCommand("rm", args, options)
 	return showElapse, err
 }
 
@@ -444,7 +546,6 @@ func (s *OssutilCommandSuite) removeWrapper(cmdline string, bucket string, objec
 		"encodingType":    &encodingType,
 	}
 	showElapse, err := cm.RunCommand(command, args, options)
-	time.Sleep(sleepTime)
 	return showElapse, err
 }
 
@@ -580,7 +681,40 @@ func (s *OssutilCommandSuite) putBucket(bucket string, c *C) {
 	showElapse, err := cm.RunCommand(command, args, options)
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-	time.Sleep(sleepTime)
+}
+
+func (s *OssutilCommandSuite) putBucketWithEndPoint(bucket string, strEndPoint string, c *C) {
+	command := "mb"
+	args := []string{CloudURLToString(bucket, "")}
+	str := ""
+	options := OptionMapType{
+		"endpoint":        &strEndPoint,
+		"accessKeyID":     &str,
+		"accessKeySecret": &str,
+		"stsToken":        &str,
+		"configFile":      &configFile,
+	}
+	showElapse, err := cm.RunCommand(command, args, options)
+	c.Assert(err, IsNil)
+	c.Assert(showElapse, Equals, true)
+}
+
+func (s *OssutilCommandSuite) putBucketVersioning(bucket string, status string, c *C) {
+	command := "bucket-versioning"
+	args := []string{CloudURLToString(bucket, ""), status}
+	str := ""
+	strMethod := "put"
+	options := OptionMapType{
+		"endpoint":        &str,
+		"accessKeyID":     &str,
+		"accessKeySecret": &str,
+		"stsToken":        &str,
+		"configFile":      &configFile,
+		"method":          &strMethod,
+	}
+	showElapse, err := cm.RunCommand(command, args, options)
+	c.Assert(err, IsNil)
+	c.Assert(showElapse, Equals, true)
 }
 
 func (s *OssutilCommandSuite) putBucketWithStorageClass(bucket string, storageClass string, c *C) error {
@@ -750,7 +884,7 @@ func (s *OssutilCommandSuite) rawCPWithPayer(args []string, recursive, force, up
 	partSize := strconv.FormatInt(DefaultPartSize, 10)
 	cpDir := CheckpointDir
 	options := OptionMapType{
-		"endpoint":         &str,
+		"endpoint":         &payerBucketEndPoint,
 		"accessKeyID":      &str,
 		"accessKeySecret":  &str,
 		"stsToken":         &str,
@@ -850,7 +984,6 @@ func (s *OssutilCommandSuite) putObject(bucket, object, fileName string, c *C) {
 	showElapse, err := s.rawCPWithArgs(args, false, true, false, DefaultBigFileThreshold, CheckpointDir)
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-	time.Sleep(sleepTime)
 }
 
 func (s *OssutilCommandSuite) getObject(bucket, object, fileName string, c *C) {
@@ -1180,8 +1313,6 @@ func (s *OssutilCommandSuite) createTestObjects(dir, subdir, bucketStr string, c
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	return objs
 }
 
@@ -1472,7 +1603,7 @@ func (s *OssutilCommandSuite) TestDecideConfigFile(c *C) {
 	usr, _ := user.Current()
 	file := DecideConfigFile("")
 	c.Assert(file, Equals, strings.Replace(DefaultConfigFile, "~", usr.HomeDir, 1))
-	input := "~/a"
+	input := "~" + string(os.PathSeparator) + "a"
 	file = DecideConfigFile(input)
 	c.Assert(file, Equals, strings.Replace(input, "~", usr.HomeDir, 1))
 }
@@ -1574,7 +1705,7 @@ func (s *OssutilCommandSuite) TestStorageURL(c *C) {
 
 	usr, _ := user.Current()
 	dir := usr.HomeDir
-	url := "~/test"
+	url := "~" + string(os.PathSeparator) + "test"
 	var fileURL FileURL
 	fileURL.Init(url, "")
 	c.Assert(fileURL.urlStr, Equals, strings.Replace(url, "~", dir, 1))

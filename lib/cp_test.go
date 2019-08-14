@@ -2,6 +2,7 @@ package lib
 
 import (
 	"fmt"
+	"hash/fnv"
 	"io/ioutil"
 	"net/url"
 	"os"
@@ -17,7 +18,7 @@ func (s *OssutilCommandSuite) TestCPObject(c *C) {
 	bucketName := bucketNamePrefix + randLowStr(10)
 	s.putBucket(bucketName, c)
 	// dest bucket is not exist
-	destBucket := bucketNamePrefix + randLowStr(10)
+	destBucket := bucketName + "-dest"
 
 	// put object
 	s.createFile(uploadFileName, content, c)
@@ -31,7 +32,6 @@ func (s *OssutilCommandSuite) TestCPObject(c *C) {
 	// modify the content of the file
 	data := "欢迎使用ossutil"
 	s.createFile(uploadFileName, data, c)
-	time.Sleep(sleepTime)
 	// overwrite the object
 	s.putObject(bucketName, object, uploadFileName, c)
 	// get object
@@ -103,7 +103,6 @@ func (s *OssutilCommandSuite) TestCPObject(c *C) {
 	// copy single object in directory, verify the path of dest object
 	srcObject := "a/b/c/d/e"
 	s.putObject(bucketName, srcObject, uploadFileName, c)
-	time.Sleep(time.Second)
 	s.copyObject(bucketName, srcObject, destBucket, "", c)
 	s.getObject(destBucket, "e", filePath, c)
 	str = s.readFile(filePath, c)
@@ -437,15 +436,18 @@ func (s *OssutilCommandSuite) TestPutMultiLevelSrcURL(c *C) {
 func (s *OssutilCommandSuite) TestCopyMultiLevelSrcURL(c *C) {
 	bucketName := bucketNamePrefix + randLowStr(10)
 	s.putBucket(bucketName, c)
-	destBucket := bucketNamePrefix + randLowStr(10)
+	destBucket := bucketName + "-dest"
 	s.putBucket(destBucket, c)
 
-	s.createFile(uploadFileName, content, c)
+	fileName := randLowStr(10)
+	content := randLowStr(10)
+	s.createFile(fileName, content, c)
+
 	suffix := randLowStr(5)
 	multiLevelDir := randLowStr(5) + "/" + suffix
 	object := randLowStr(5)
 	multiLevelObj := multiLevelDir + "/" + object
-	s.putObject(bucketName, multiLevelObj, uploadFileName, c)
+	s.putObject(bucketName, multiLevelObj, fileName, c)
 
 	//copy object, the src object is in multi-level directory
 	showElapse, err := s.rawCP(CloudURLToString(bucketName, multiLevelObj), CloudURLToString(destBucket, ""), false, true, false, DefaultBigFileThreshold, CheckpointDir)
@@ -455,7 +457,7 @@ func (s *OssutilCommandSuite) TestCopyMultiLevelSrcURL(c *C) {
 
 	object = randLowStr(10)
 	multiLevelObj = multiLevelDir + "/" + object
-	s.putObject(bucketName, multiLevelObj, uploadFileName, c)
+	s.putObject(bucketName, multiLevelObj, fileName, c)
 
 	//copy object with --recursive, the src dir is multi-level directory
 	showElapse, err = s.rawCP(CloudURLToString(bucketName, multiLevelDir), CloudURLToString(destBucket, ""), true, true, false, DefaultBigFileThreshold, CheckpointDir)
@@ -468,6 +470,7 @@ func (s *OssutilCommandSuite) TestCopyMultiLevelSrcURL(c *C) {
 	c.Assert(showElapse, Equals, true)
 	s.getStat(destBucket, object, c)
 
+	os.Remove(fileName)
 	s.removeBucket(bucketName, true, c)
 	s.removeBucket(destBucket, true, c)
 }
@@ -528,7 +531,7 @@ func (s *OssutilCommandSuite) TestCopyWithPayer(c *C) {
 	//copy from payer bucket
 	srcBucket := payerBucket
 	destBucket := bucketNamePrefix + randLowStr(5)
-	s.putBucket(destBucket, c)
+	s.putBucketWithEndPoint(destBucket, payerBucketEndPoint, c)
 	s.createFile(uploadFileName, content, c)
 
 	//at first, put object to bucket for test
@@ -644,8 +647,6 @@ func (s *OssutilCommandSuite) TestBatchCPObject(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(2 * time.Second)
-
 	// get files
 	downDir := "下载目录"
 	showElapse, err = s.rawCP(CloudURLToString(bucketName, ""), downDir, true, true, false, DefaultBigFileThreshold, CheckpointDir)
@@ -686,7 +687,6 @@ func (s *OssutilCommandSuite) TestBatchCPObject(c *C) {
 	showElapse, err = s.rawCP(CloudURLToString(bucketName, ""), CloudURLToString(destBucket, "123"), true, true, false, DefaultBigFileThreshold, CheckpointDir)
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-	time.Sleep(1* time.Second)
 
 	for _, filePath := range filePaths {
 		s.getStat(destBucket, "123/"+filePath, c)
@@ -710,7 +710,6 @@ func (s *OssutilCommandSuite) TestCPObjectUpdate(c *C) {
 	newData := "new data"
 	newFile := "newFile" + randStr(5)
 	s.createFile(oldFile, oldData, c)
-	time.Sleep(1* time.Second)
 	s.createFile(newFile, newData, c)
 
 	// put newer object
@@ -726,7 +725,6 @@ func (s *OssutilCommandSuite) TestCPObjectUpdate(c *C) {
 	showElapse, err := s.rawCP(oldFile, CloudURLToString(bucketName, object), false, false, true, DefaultBigFileThreshold, CheckpointDir)
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-	time.Sleep(1* time.Second)
 
 	s.getObject(bucketName, object, downloadFileName, c)
 	str = s.readFile(downloadFileName, c)
@@ -1372,7 +1370,7 @@ func (s *OssutilCommandSuite) TestCopyOutputDir(c *C) {
 
 	srcBucket := bucketNamePrefix + randLowStr(10)
 	s.putBucket(srcBucket, c)
-	destBucket := bucketNamePrefix + randLowStr(10)
+	destBucket := srcBucket + "-dest"
 	s.putBucket(destBucket, c)
 
 	object := randStr(10)
@@ -1491,8 +1489,8 @@ func (s *OssutilCommandSuite) TestBatchCopyOutputDir(c *C) {
 func (s *OssutilCommandSuite) TestConfigOutputDir(c *C) {
 	// test default outputdir
 	edir := ""
-	dir := randStr(10)
-	dir1 := randStr(10)
+	dir := randStr(10) + "testconfigoutputdir"
+	dir1 := dir + "another"
 	os.RemoveAll(DefaultOutputDir)
 	os.RemoveAll(dir)
 	os.RemoveAll(dir1)
@@ -1541,8 +1539,11 @@ func (s *OssutilCommandSuite) TestConfigOutputDir(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(len(fileList), Equals, 1)
 
-	os.RemoveAll(dir)
-	os.RemoveAll(DefaultOutputDir)
+	err = os.RemoveAll(dir)
+	c.Assert(err, IsNil)
+
+	err = os.RemoveAll(DefaultOutputDir)
+	c.Assert(err, IsNil)
 
 	// option and config
 	showElapse, err = s.rawCPWithOutputDir(ufile, CloudURLToString(bucketName, object), true, true, false, 1, dir1)
@@ -1752,8 +1753,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNormalInclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --include "*.txt"
 	downdir := "testdownload-inc1" + randLowStr(5)
@@ -1762,8 +1761,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNormalInclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.txt") and use these for verification
 	files := filterStrsWithInclude(filenames, "*.txt")
@@ -1806,8 +1803,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMarkInclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --include "*2??txt"
 	downdir := "testdownload-inc2" + randLowStr(5)
@@ -1816,8 +1811,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMarkInclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*2??txt") and use these for verification
 	files := filterStrsWithInclude(filenames, "*2??txt")
@@ -1860,8 +1853,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithSequenceInclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --include "*2??txt"
 	downdir := "testdownload-inc3" + randLowStr(5)
@@ -1870,8 +1861,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithSequenceInclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*[0-9]?jpg") and use these for verification
 	files := filterStrsWithInclude(filenames, "*[0-9]?jpg")
@@ -1914,8 +1903,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceInclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --include "*[^0-3]?txt""
 	downdir := "testdownload-inc4" + randLowStr(5)
@@ -1924,8 +1911,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceInclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*[0-9]?jpg") and use these for verification
 	files := filterStrsWithInclude(filenames, "*[^0-3]?txt")
@@ -1967,8 +1952,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceIncludeEx(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --include "*[!0-3]?txt""
 	downdir := "testdownload-inc4-ex" + randLowStr(5)
@@ -1977,8 +1960,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceIncludeEx(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	res, filters := getFilter(cmdline)
 	c.Assert(res, Equals, true)
@@ -2023,8 +2004,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithRepeatedInclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --include "*.jpg" --include "*.jpg"
 	downdir := "testdownload-inc5" + randLowStr(5)
@@ -2033,8 +2012,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithRepeatedInclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.jpg" --include "*.jpg") and use these for verification
 	files := filterStrsWithInclude(filenames, "*.jpg")
@@ -2077,8 +2054,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithFullInclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --include "*"
 	downdir := "testdownload-inc6" + randLowStr(5)
@@ -2087,8 +2062,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithFullInclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Verify
 	_, err = os.Stat(downdir)
@@ -2128,8 +2101,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNormalExclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --exclude uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --exclude "*.txt"
 	downdir := "testdownload-exc1" + randLowStr(5)
@@ -2138,8 +2109,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNormalExclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --exclude "*.txt") and use these for verification
 	files := filterStrsWithExclude(filenames, "*.txt")
@@ -2182,8 +2151,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMarkExclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --exclude uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --exclude "*2??txt"
 	downdir := "testdownload-exc2" + randLowStr(5)
@@ -2192,8 +2159,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMarkExclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --exclude "*2??txt") and use these for verification
 	files := filterStrsWithExclude(filenames, "*2??txt")
@@ -2236,8 +2201,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithSequenceExclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --exclude uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --exclude "*2??txt"
 	downdir := "testdownload-exc3" + randLowStr(5)
@@ -2246,8 +2209,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithSequenceExclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --exclude "*[0-9]?jpg") and use these for verification
 	files := filterStrsWithExclude(filenames, "*[0-9]?jpg")
@@ -2290,8 +2251,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceExclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --exclude uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --exclude "*2??txt"
 	downdir := "testdownload-exc4" + randLowStr(5)
@@ -2300,8 +2259,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceExclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --exclude "*[^0-3]?txt") and use these for verification
 	files := filterStrsWithExclude(filenames, "*[^0-3]?txt")
@@ -2344,8 +2301,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceExcludeEx(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --exclude uploaded
 	downdir := "testdownload-exc4" + randLowStr(5)
 	args = []string{bucketStr, downdir}
@@ -2353,8 +2308,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithNonSequenceExcludeEx(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --exclude "*[^0-3]?txt") and use these for verification
 	res, filters := getFilter(cmdline)
@@ -2399,8 +2352,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithRepeatedExclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --exclude "*.jpg" --exclude "*.jpg"
 	downdir := "testdownload-exc5" + randLowStr(5)
@@ -2409,8 +2360,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithRepeatedExclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --exclude "*.jpg" --exclude "*.jpg") and use these for verification
 	files := filterStrsWithExclude(filenames, "*.jpg")
@@ -2453,8 +2402,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithFullExclude(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download above files with --include uploaded
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf --exclude "*"
 	downdir := "testdownload-exc6" + randLowStr(5)
@@ -2463,8 +2410,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithFullExclude(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --exclude "*[^0-3]?txt") and use these for verification
 	files := filterStrsWithExclude(filenames, "*")
@@ -2508,8 +2453,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalIncludeExclude(c *
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc1" + randLowStr(5)
@@ -2518,8 +2461,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalIncludeExclude(c *
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.txt" --exclude "*2*") and use these for verification
 	fts := []filterOptionType{{"--include", "*.txt"}, {"--exclude", "*2*"}}
@@ -2563,8 +2504,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiRepeatedIncludeExclude(c
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc-repeated" + randLowStr(5)
@@ -2573,8 +2512,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiRepeatedIncludeExclude(c
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.txt" --exclude "*2*") and use these for verification
 	fts := []filterOptionType{{"--include", "*.txt"}, {"--exclude", "*2*"}, {"--include", "*.txt"}, {"--exclude", "*2*"}}
@@ -2618,8 +2555,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiFullIncludeExclude(c *C)
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc2" + randLowStr(5)
@@ -2628,8 +2563,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiFullIncludeExclude(c *C)
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.txt" --exclude "*2*") and use these for verification
 	fts := []filterOptionType{{"--include", "*"}, {"--exclude", "*"}}
@@ -2675,8 +2608,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiFullExcludeInclude(c *C)
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc3" + randLowStr(5)
@@ -2685,8 +2616,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiFullExcludeInclude(c *C)
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.txt" --exclude "*2*") and use these for verification
 	fts := []filterOptionType{{"--exclude", "*"}, {"--include", "*"}}
@@ -2812,8 +2741,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiFullExcludeIncludeEqual(
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc3" + randLowStr(5)
@@ -2822,8 +2749,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiFullExcludeIncludeEqual(
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.txt" --exclude "*2*") and use these for verification
 	fts := []filterOptionType{{"--exclude", "*"}, {"--include", "*"}}
@@ -2949,8 +2874,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalOnlyIncludeEqual(c
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc1" + randLowStr(5)
@@ -2959,8 +2882,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalOnlyIncludeEqual(c
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include="*.txt") and use these for verification
 	fts := []filterOptionType{{"--include", "*.txt"}}
@@ -3015,8 +2936,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalOnlyExcludeEqual(c
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc1" + randLowStr(5)
@@ -3025,8 +2944,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalOnlyExcludeEqual(c
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	ftsTxt := []filterOptionType{{"--include", "*.txt"}}
 	filesTxt := matchFiltersForStrs(filenames, ftsTxt)
@@ -3090,8 +3007,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalIncludeMixtureExcl
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-inc-exc1" + randLowStr(5)
@@ -3100,8 +3015,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMultiNormalIncludeMixtureExcl
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	ftsTxt := []filterOptionType{{"--include", "*.txt"}}
 	filesTxt := matchFiltersForStrs(filenames, ftsTxt)
@@ -3167,8 +3080,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMetaAcl(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
 	downdir := "testdownload-meta"
@@ -3177,8 +3088,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMetaAcl(c *C) {
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "", "")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// Get uploaded files (with above conditions: --include "*.txt" --include "*.jpg" --exclude "*2*") and use these for verification
 	fts := []filterOptionType{{"--include", "*.txt"}, {"--include", "*.jpg"}, {"--exclude", "*2*"}}
@@ -3211,7 +3120,7 @@ func (s *OssutilCommandSuite) TestBatchCPObjectWithMetaAcl(c *C) {
 // Test for copy objects, with --include, --exclude, --meta, --acl testing
 func (s *OssutilCommandSuite) TestBatchCPObjectBetweenOssWithMetaAcl(c *C) {
 	bucketName := bucketNamePrefix + randLowStr(10)
-	dstBucketName :=bucketName + "-dest" 
+	dstBucketName := bucketName + "-dest"
 	s.putBucket(bucketName, c)
 	bucketStr := CloudURLToString(bucketName, "")
 	s.putBucket(dstBucketName, c)
@@ -3230,16 +3139,12 @@ func (s *OssutilCommandSuite) TestBatchCPObjectBetweenOssWithMetaAcl(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
 
-	time.Sleep(1 * time.Second)
-
 	// Copy between 2 buckets
 	args = []string{bucketStr, dstBucketStr}
 	cmdline = []string{"ossutil", "cp", bucketStr, dstBucketStr, "-rf", "--include", "*", "--exclude", "*10*"}
 	showElapse, err = s.rawCPWithFilter(args, true, true, false, DefaultBigFileThreshold, CheckpointDir, cmdline, "Cache-Control:no-cache-ok#X-Oss-Meta-Test-Copy-Oss:copy-between-oss", "public-read")
 	c.Assert(err, IsNil)
 	c.Assert(showElapse, Equals, true)
-
-	time.Sleep(1 * time.Second)
 
 	// download all above files for verification
 	// e.g., ossutil cp oss://tempb4/ testdownload/ -rf
@@ -3253,8 +3158,6 @@ func (s *OssutilCommandSuite) TestBatchCPObjectBetweenOssWithMetaAcl(c *C) {
 	// Get files (with above conditions: --include "*" --exclude "*10*") and use these for verification
 	fts := []filterOptionType{{"--include", "*"}, {"--exclude", "*10*"}}
 	files := matchFiltersForStrs(filenames, fts)
-
-	time.Sleep(1 * time.Second)
 
 	// Verify
 	_, err = os.Stat(downdir)
@@ -3405,5 +3308,471 @@ func (s *OssutilCommandSuite) TestCPDirLimitSpeed(c *C) {
 	err = os.Remove(udir + string(os.PathSeparator) + objectFirst)
 	err = os.Remove(udir + string(os.PathSeparator) + objectSecond)
 	err = os.RemoveAll(udir)
+	s.removeBucket(bucketName, true, c)
+}
+
+func (s *OssutilCommandSuite) TestCPPartionDownloadSuccess(c *C) {
+	bucketName := bucketNamePrefix + randLowStr(10)
+	s.putBucket(bucketName, c)
+
+	fileName := randLowStr(10)
+	content := randLowStr(10)
+	s.createFile(fileName, content, c)
+
+	objectFirst := ""
+	objectSecond := ""
+	for {
+		tempStr := randStr(12)
+		fnvIns := fnv.New64()
+		fnvIns.Write([]byte(tempStr))
+		if fnvIns.Sum64()%2 == 0 {
+			objectFirst = tempStr
+		} else {
+			objectSecond = tempStr
+		}
+		if objectFirst != "" && objectSecond != "" {
+			break
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	s.putObject(bucketName, objectFirst, fileName, c)
+	s.putObject(bucketName, objectSecond, fileName, c)
+
+	downloadPath := "." + string(os.PathSeparator) + randLowStr(10)
+	err := os.MkdirAll(downloadPath, 0755)
+	c.Assert(err, IsNil)
+
+	// download objectFirst
+	command := "cp"
+	str := ""
+	cpDir := CheckpointDir
+	strMultiInstance := ""
+	bRecursive := true
+	routines := strconv.Itoa(Routines)
+	options := OptionMapType{
+		"endpoint":          &str,
+		"accessKeyID":       &str,
+		"accessKeySecret":   &str,
+		"configFile":        &ConfigFile,
+		"checkpointDir":     &cpDir,
+		"recursive":         &bRecursive,
+		"routines":          &routines,
+		"partitionDownload": &strMultiInstance,
+	}
+	srcUrl := CloudURLToString(bucketName, "")
+	args := []string{srcUrl, downloadPath}
+
+	strMultiInstance = "1:2"
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, IsNil)
+
+	// checkfile objectFirst success
+	fileInfo, err := os.Stat(downloadPath + string(os.PathSeparator) + objectFirst)
+	c.Assert(err, IsNil)
+	c.Assert(fileInfo.Size(), Equals, int64(len(content)))
+
+	// checkfile objectSecond Error
+	fileInfo, err = os.Stat(downloadPath + string(os.PathSeparator) + objectSecond)
+	c.Assert(err, NotNil)
+
+	os.RemoveAll(downloadPath)
+	err = os.MkdirAll(downloadPath, 0755)
+	c.Assert(err, IsNil)
+
+	// download objectSecond
+	strMultiInstance = "2:2"
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, IsNil)
+
+	// checkfile objectFirst error
+	fileInfo, err = os.Stat(downloadPath + string(os.PathSeparator) + objectFirst)
+	c.Assert(err, NotNil)
+
+	// checkfile objectSecond success
+	fileInfo, err = os.Stat(downloadPath + string(os.PathSeparator) + objectSecond)
+	c.Assert(err, IsNil)
+	c.Assert(fileInfo.Size(), Equals, int64(len(content)))
+
+	os.RemoveAll(fileName)
+	os.RemoveAll(downloadPath)
+	s.removeBucket(bucketName, true, c)
+}
+
+func (s *OssutilCommandSuite) TestCPPartitionDownloadParameterError(c *C) {
+	bucketName := bucketNamePrefix + randLowStr(10)
+	downloadPath := "." + string(os.PathSeparator) + randLowStr(10)
+
+	command := "cp"
+	str := ""
+	cpDir := CheckpointDir
+	strMultiInstance := ""
+	bRecursive := true
+	routines := strconv.Itoa(Routines)
+	options := OptionMapType{
+		"endpoint":          &str,
+		"accessKeyID":       &str,
+		"accessKeySecret":   &str,
+		"configFile":        &ConfigFile,
+		"checkpointDir":     &cpDir,
+		"recursive":         &bRecursive,
+		"routines":          &routines,
+		"partitionDownload": &strMultiInstance,
+	}
+	srcUrl := CloudURLToString(bucketName, "")
+	args := []string{srcUrl, downloadPath}
+
+	// error 1
+	strMultiInstance = "-1:2"
+	_, err := cm.RunCommand(command, args, options)
+	c.Assert(err, NotNil)
+
+	// error 2
+	strMultiInstance = "2:1"
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, NotNil)
+
+	// error 3
+	strMultiInstance = "abc:1"
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, NotNil)
+
+	// error 4
+	strMultiInstance = "1:abc"
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, NotNil)
+
+	// error 5
+	strMultiInstance = "1:2:3"
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, NotNil)
+
+	// error 6
+	strMultiInstance = ""
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, NotNil)
+
+	// error7
+	strMultiInstance = "1:2"
+	args = []string{downloadPath, srcUrl}
+	_, err = cm.RunCommand(command, args, options)
+	c.Assert(err, NotNil)
+}
+
+func (s *OssutilCommandSuite) TestCPDownloadSnapshot(c *C) {
+	bucketName := bucketNamePrefix + randLowStr(12)
+	s.putBucket(bucketName, c)
+
+	//download snapshot dir
+	testSnapshotDir := "ossutil_test_snapshot" + randStr(5)
+	os.RemoveAll(testSnapshotDir)
+
+	// download object dir
+	downloadDir := "ossutil_test_" + randStr(5)
+	os.RemoveAll(downloadDir)
+	err := os.MkdirAll(downloadDir, 0755)
+	c.Assert(err, IsNil)
+
+	// put object1
+	testUploadFileName := "ossutil_test_uploadfile" + randStr(5)
+	data := "test"
+	object1 := "ossutil_test_object1" + randStr(5)
+	s.createFile(testUploadFileName, data, c)
+	s.putObject(bucketName, object1, testUploadFileName, c)
+
+	// download with snapshot
+	cpArgs := []string{CloudURLToString(bucketName, ""), downloadDir}
+	str := ""
+	cpDir := CheckpointDir
+	routines := strconv.Itoa(Routines)
+	recursive := true
+	options := OptionMapType{
+		"endpoint":        &str,
+		"accessKeyID":     &str,
+		"accessKeySecret": &str,
+		"configFile":      &configFile,
+		"checkpointDir":   &cpDir,
+		"routines":        &routines,
+		"recursive":       &recursive,
+		"snapshotPath":    &testSnapshotDir,
+	}
+
+	_, err = cm.RunCommand("cp", cpArgs, options)
+	c.Assert(err, IsNil)
+
+	//check download file object1
+	fileInfo, err := os.Stat(downloadDir + string(os.PathSeparator) + object1)
+	c.Assert(err, IsNil)
+	c.Assert(fileInfo.Size(), Equals, int64(len(data)))
+
+	//remove downloadfile and check
+	err = os.Remove(downloadDir + string(os.PathSeparator) + object1)
+	c.Assert(err, IsNil)
+	fileInfo, err = os.Stat(downloadDir + string(os.PathSeparator) + object1)
+	c.Assert(err, NotNil)
+
+	// put object2
+	object2 := "ossutil_test_object2" + randStr(5)
+	s.putObject(bucketName, object2, testUploadFileName, c)
+
+	// download with cp download snapshot
+	_, err = cm.RunCommand("cp", cpArgs, options)
+	c.Assert(err, IsNil)
+
+	//check download file object2
+	fileInfo, err = os.Stat(downloadDir + string(os.PathSeparator) + object2)
+	c.Assert(err, IsNil)
+	c.Assert(fileInfo.Size(), Equals, int64(len(data)))
+
+	// check download file object1 error
+	fileInfo, err = os.Stat(downloadDir + string(os.PathSeparator) + object1)
+	c.Assert(err, NotNil)
+
+	//remove snapshot file
+	err = os.RemoveAll(testSnapshotDir)
+	c.Assert(err, IsNil)
+
+	// download again
+	ok := true
+	options["update"] = &ok
+	_, err = cm.RunCommand("cp", cpArgs, options)
+	c.Assert(err, IsNil)
+
+	// check download file object1 success
+	fileInfo, err = os.Stat(downloadDir + string(os.PathSeparator) + object1)
+	c.Assert(fileInfo.Size(), Equals, int64(len(data)))
+
+	os.Remove(testUploadFileName)
+	err = os.RemoveAll(downloadDir)
+	err = os.RemoveAll(testSnapshotDir)
+	s.removeBucket(bucketName, true, c)
+}
+
+func (s *OssutilCommandSuite) TestCPVersioingParameterError(c *C) {
+	bucketName := bucketNamePrefix + randLowStr(12)
+	cpTestDir := "ossutil_test_" + randStr(5)
+
+	// error:upload with version-id
+	cpArgs := []string{cpTestDir, CloudURLToString(bucketName, "")}
+	str := ""
+	cpDir := CheckpointDir
+	routines := strconv.Itoa(Routines)
+	versionId := "123"
+	options := OptionMapType{
+		"endpoint":        &str,
+		"accessKeyID":     &str,
+		"accessKeySecret": &str,
+		"configFile":      &configFile,
+		"checkpointDir":   &cpDir,
+		"routines":        &routines,
+		"versionId":       &versionId,
+	}
+	_, err := cm.RunCommand("cp", cpArgs, options)
+	c.Assert(err, NotNil)
+
+	//error:download with -r
+	recursive := true
+	options["recursive"] = &recursive
+	cpArgs = []string{CloudURLToString(bucketName, ""), cpTestDir}
+	c.Assert(err, NotNil)
+}
+
+// down load with versionId
+func (s *OssutilCommandSuite) TestCPVersioingDownloadSuccess(c *C) {
+	bucketName := bucketNamePrefix + randLowStr(12)
+	s.putBucket(bucketName, c)
+	s.putBucketVersioning(bucketName, string(oss.VersionEnabled), c)
+
+	// put object
+	objectName := "ossutil_test_object" + randStr(5)
+	testFileName := "ossutil_test_file" + randStr(5)
+	data := randStr(100)
+	s.createFile(testFileName, data, c)
+	s.putObject(bucketName, objectName, testFileName, c)
+
+	// get versionID
+	objectStat := s.getStat(bucketName, objectName, c)
+	versionId := objectStat["X-Oss-Version-Id"]
+	c.Assert(len(versionId) > 0, Equals, true)
+
+	// overwrite object
+	s.createFile(testFileName, randStr(200), c)
+	s.putObject(bucketName, objectName, testFileName, c)
+
+	downFileName := "ossutil_test_" + randStr(5)
+
+	//download with version-id
+	cpArgs := []string{CloudURLToString(bucketName, objectName), downFileName}
+	str := ""
+	cpDir := CheckpointDir
+	routines := strconv.Itoa(Routines)
+	options := OptionMapType{
+		"endpoint":        &str,
+		"accessKeyID":     &str,
+		"accessKeySecret": &str,
+		"configFile":      &configFile,
+		"checkpointDir":   &cpDir,
+		"routines":        &routines,
+		"versionId":       &versionId,
+	}
+	_, err := cm.RunCommand("cp", cpArgs, options)
+	c.Assert(err, IsNil)
+
+	// check download file
+	fileBody, err := ioutil.ReadFile(downFileName)
+	c.Assert(err, IsNil)
+	c.Assert(data, Equals, string(fileBody))
+
+	os.Remove(testFileName)
+	os.RemoveAll(downFileName)
+	s.removeBucket(bucketName, true, c)
+}
+
+// down load with versionId
+func (s *OssutilCommandSuite) TestCPVersioingCopySuccess(c *C) {
+	bucketName := bucketNamePrefix + randLowStr(12)
+	s.putBucket(bucketName, c)
+	s.putBucketVersioning(bucketName, string(oss.VersionEnabled), c)
+
+	// put object
+	objectName := "ossutil_test_object" + randStr(5)
+	testFileName := "ossutil_test_file" + randStr(5)
+	data := randStr(100)
+	s.createFile(testFileName, data, c)
+	s.putObject(bucketName, objectName, testFileName, c)
+
+	// get versionID
+	objectStat := s.getStat(bucketName, objectName, c)
+	versionId := objectStat["X-Oss-Version-Id"]
+	c.Assert(len(versionId) > 0, Equals, true)
+
+	// overwrite object
+	s.createFile(testFileName, randStr(200), c)
+	s.putObject(bucketName, objectName, testFileName, c)
+
+	// copy object
+	objectTarget := objectName + "-target"
+
+	//copy object
+	cpArgs := []string{CloudURLToString(bucketName, objectName), CloudURLToString(bucketName, objectTarget)}
+	str := ""
+	cpDir := CheckpointDir
+	routines := strconv.Itoa(Routines)
+	options := OptionMapType{
+		"endpoint":        &str,
+		"accessKeyID":     &str,
+		"accessKeySecret": &str,
+		"configFile":      &configFile,
+		"checkpointDir":   &cpDir,
+		"routines":        &routines,
+		"versionId":       &versionId,
+	}
+	_, err := cm.RunCommand("cp", cpArgs, options)
+	c.Assert(err, IsNil)
+
+	// download target object
+	// delete versionId
+	delete(options, "versionId")
+	downFileName := "ossutil_test_" + randStr(5)
+	cpArgs = []string{CloudURLToString(bucketName, objectTarget), downFileName}
+	_, err = cm.RunCommand("cp", cpArgs, options)
+	c.Assert(err, IsNil)
+
+	// check download file
+	fileBody, err := ioutil.ReadFile(downFileName)
+	c.Assert(err, IsNil)
+	c.Assert(data, Equals, string(fileBody))
+
+	os.Remove(testFileName)
+	os.RemoveAll(downFileName)
+	s.removeBucket(bucketName, true, c)
+}
+
+func (s *OssutilCommandSuite) TestCPWithAuthProxy(c *C) {
+	if proxyHost == "" {
+		return
+	}
+
+	bucketName := bucketNamePrefix + randLowStr(10)
+	s.putBucket(bucketName, c)
+
+	fileName := randLowStr(10)
+	content := randLowStr(10)
+	s.createFile(fileName, content, c)
+	objectName := "ossutil_test_object" + randStr(5)
+
+	// upload object
+	thre := strconv.FormatInt(DefaultBigFileThreshold, 10)
+	command := "cp"
+	str := ""
+	cpDir := CheckpointDir
+	routines := strconv.Itoa(Routines)
+	options := OptionMapType{
+		"endpoint":         &str,
+		"accessKeyID":      &str,
+		"accessKeySecret":  &str,
+		"configFile":       &ConfigFile,
+		"checkpointDir":    &cpDir,
+		"routines":         &routines,
+		"bigfileThreshold": &thre,
+		"proxyHost":        &proxyHost,
+		"proxyUser":        &proxyUser,
+		"proxyPwd":         &proxyPwd,
+	}
+	srcUrl := CloudURLToString(bucketName, objectName)
+	args := []string{fileName, srcUrl}
+
+	_, err := cm.RunCommand(command, args, options)
+	c.Assert(err, IsNil)
+
+	os.RemoveAll(fileName)
+	s.removeBucket(bucketName, true, c)
+}
+
+func (s *OssutilCommandSuite) TestCPWithAuthProxyError(c *C) {
+	if proxyHost == "" {
+		return
+	}
+
+	bucketName := bucketNamePrefix + randLowStr(10)
+	s.putBucket(bucketName, c)
+
+	fileName := randLowStr(10)
+	content := randLowStr(10)
+	s.createFile(fileName, content, c)
+	objectName := "ossutil_test_object" + randStr(5)
+
+	// upload object,proxy-user is empty
+	thre := strconv.FormatInt(DefaultBigFileThreshold, 10)
+	command := "cp"
+	str := ""
+	cpDir := CheckpointDir
+	routines := strconv.Itoa(Routines)
+	options := OptionMapType{
+		"endpoint":         &str,
+		"accessKeyID":      &str,
+		"accessKeySecret":  &str,
+		"configFile":       &ConfigFile,
+		"checkpointDir":    &cpDir,
+		"routines":         &routines,
+		"bigfileThreshold": &thre,
+		"proxyHost":        &proxyHost,
+		"proxyUser":        &str,
+		"proxyPwd":         &proxyPwd,
+	}
+	srcUrl := CloudURLToString(bucketName, objectName)
+	args := []string{fileName, srcUrl}
+
+	_, err := cm.RunCommand(command, args, options)
+    c.Assert(err, NotNil)
+    
+    // upload object,proxy-pwd is empty
+    options["proxyUser"] = &proxyUser
+    options["proxyPwd"] = &str
+
+    _, err = cm.RunCommand(command, args, options)
+    c.Assert(err, NotNil)
+
+	os.RemoveAll(fileName)
 	s.removeBucket(bucketName, true, c)
 }
